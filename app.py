@@ -1,6 +1,6 @@
 from flask import Flask, request, Response
 import requests
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote
 import re
 import urllib3
 
@@ -8,60 +8,39 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# Kalıcı yönlendirici adresi
-REDIRECT_URL = "https://elmacibaba.com"
-
-def get_real_domain():
-    """Yönlendirici siteye gidip, asıl hedef domaini bulur."""
-    try:
-        # Yönlendirmeleri takip ederek nihai hedefe ulaş
-        res = requests.get(REDIRECT_URL, allow_redirects=True, timeout=10, verify=False)
-        final_url = res.url
-        parsed_uri = urlparse(final_url)
-        domain = parsed_uri.netloc
-        
-        # Eğer hala elmacibaba veya t.ly gibi bir yönlendiriciyse, varsayılan domaini kullan
-        if "elmacibaba" in domain or "t.ly" in domain or not domain:
-            return "beyazelma78.com"
-        
-        # Sadece kök domaini al (örn: beyazelma78.com)
-        parts = domain.split('.')
-        if len(parts) >= 2:
-            root_domain = f"{parts[-2]}.{parts[-1]}"
-            return root_domain
-        return domain
-    except Exception as e:
-        print(f"Domain bulma hatası: {e}")
-        # Hata olursa bilinen çalışan domaine dön
-        return "beyazelma78.com"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://embed.beyazelma78.com/",
+    "Origin": "https://embed.beyazelma78.com"
+}
 
 @app.route('/')
 def home():
-    real_domain = get_real_domain()
-    return f"Akıllı Proxy Aktif! Şu anki hedef domain: {real_domain}"
+    return "BeyazElma Proxy Aktif!"
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
-    real_domain = get_real_domain()
-    embed_domain = f"embed.{real_domain}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": f"https://{embed_domain}/",
-        "Origin": f"https://{embed_domain}"
-    }
-
-    api_url = f"https://{embed_domain}/api/play/{kanal_id}"
-    
+    api_url = f"https://embed.beyazelma78.com/api/play/{kanal_id}"
     try:
-        api_res = requests.get(api_url, headers=headers, verify=False, timeout=10)
-        data = api_res.json()
-        stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
+        api_res = requests.get(api_url, headers=HEADERS, verify=False, timeout=10)
         
+        # JSON okuma hatasını önlemek için kontrol
+        try:
+            data = api_res.json()
+        except:
+            return f"API JSON dondurmedi. Sunucu Cevabi: {api_res.text} | Denenen API: {api_url}", 500
+
+        # Stream URL'sini çek
+        stream_url = data.get("primary")
+        
+        if not stream_url and "fallbacks" in data and isinstance(data["fallbacks"], list) and len(data["fallbacks"]) > 0:
+            stream_url = data["fallbacks"][0]
+        
+        # EĞER LİNK YOKSA, BİZE SİTENİN NE DÖNDÜĞÜNÜ GÖSTER (Hata Ayıklama)
         if not stream_url:
-            return f"Yayin linki bulunamadi. Denenen API: {api_url}", 404
+            return f"Yayin linki bulunamadi. Sitenin Dondugu Cevap: {data} | Denenen API: {api_url}", 404
             
-        return proxy_stream(stream_url, headers)
+        return proxy_stream(stream_url)
     except Exception as e:
         return f"Hata: {str(e)} | Denenen API: {api_url}", 500
 
@@ -70,18 +49,11 @@ def stream_proxy():
     target_url = request.args.get('url')
     if not target_url:
         return "URL eksik", 400
-        
-    real_domain = get_real_domain()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": f"https://embed.{real_domain}/",
-        "Origin": f"https://embed.{real_domain}"
-    }
-    return proxy_stream(unquote(target_url), headers)
+    return proxy_stream(unquote(target_url))
 
-def proxy_stream(target_url, headers):
+def proxy_stream(target_url):
     try:
-        req = requests.get(target_url, headers=headers, stream=True, verify=False, timeout=15)
+        req = requests.get(target_url, headers=HEADERS, stream=True, verify=False, timeout=15)
         content_type = req.headers.get('content-type', '')
 
         if 'mpegurl' in content_type or '.m3u8' in target_url:
