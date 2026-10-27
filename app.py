@@ -1,16 +1,15 @@
 from flask import Flask, request, Response
 import requests
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlparse
 import re
 import urllib3
-from urllib.parse import urlparse
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# Yönlendirici (Redirect) Sitesi
-REDIRECT_URL = "https://elmacibaba.com/"
+# Kalıcı yönlendirici adresi
+REDIRECT_URL = "https://elmacibaba.com"
 
 def get_real_domain():
     """Yönlendirici siteye gidip, asıl hedef domaini bulur."""
@@ -19,19 +18,22 @@ def get_real_domain():
         res = requests.get(REDIRECT_URL, allow_redirects=True, timeout=10, verify=False)
         final_url = res.url
         parsed_uri = urlparse(final_url)
-        domain = '{uri.netloc}'.format(uri=parsed_uri)
+        domain = parsed_uri.netloc
         
-        # Eğer elmacibaba.com'dan başka bir yere yönlendirdiyse o domaini döndür
-        if "elmacibaba" not in domain:
-            # Sadece kök domaini al (örn: beyazelma78.com)
-            parts = domain.split('.')
-            if len(parts) >= 2:
-                root_domain = f"{parts[-2]}.{parts[-1]}"
-                return root_domain
+        # Eğer hala elmacibaba veya t.ly gibi bir yönlendiriciyse, varsayılan domaini kullan
+        if "elmacibaba" in domain or "t.ly" in domain or not domain:
+            return "beyazelma78.com"
+        
+        # Sadece kök domaini al (örn: beyazelma78.com)
+        parts = domain.split('.')
+        if len(parts) >= 2:
+            root_domain = f"{parts[-2]}.{parts[-1]}"
+            return root_domain
         return domain
     except Exception as e:
         print(f"Domain bulma hatası: {e}")
-        return "beyazelma78.com" # Hata olursa eski çalışan domaine dön
+        # Hata olursa bilinen çalışan domaine dön
+        return "beyazelma78.com"
 
 @app.route('/')
 def home():
