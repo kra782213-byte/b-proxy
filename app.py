@@ -8,34 +8,36 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# Tarayıcı taklidi için daha detaylı başlıklar ekledik
+# Kendini bir iPad (Safari) olarak tanıtan en güncel başlıklar
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Language": "tr-TR,tr;q=0.9",
     "Referer": "https://beyazelma78.com/",
     "Origin": "https://beyazelma78.com",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site"
+    "Sec-Fetch-Site": "same-site",
+    "Connection": "keep-alive"
 }
 
 @app.route('/')
 def home():
-    return "BeyazElma Proxy Aktif (Session Modu)!"
+    return "BeyazElma Proxy Aktif (iPad Modu)!"
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     api_url = f"https://embed.beyazelma78.com/api/play/{kanal_id}"
     
     try:
-        # SESSION KULLANIMI: Çerezleri almak için önce ana siteye gidiyoruz
         session = requests.Session()
-        
-        # 1. Ana siteye gir (Çerezleri kapmak için)
+        # Ana siteye iPad olarak girip çerezleri topluyoruz
         session.get("https://beyazelma78.com/", headers=HEADERS, verify=False, timeout=10)
         
-        # 2. Çerezlerle birlikte API'ye istek at
+        # Embed sitesine de girip oradan da çerez topluyoruz
+        session.get("https://embed.beyazelma78.com/", headers=HEADERS, verify=False, timeout=10)
+
+        # Şimdi API isteğini atıyoruz
         api_res = session.get(api_url, headers=HEADERS, verify=False, timeout=10)
         
         try:
@@ -63,9 +65,7 @@ def stream_proxy():
 
 def proxy_stream(target_url, existing_session=None):
     try:
-        # Eğer oturum varsa onu kullan, yoksa normal istek at
         req_session = existing_session if existing_session else requests.Session()
-        
         req = req_session.get(target_url, headers=HEADERS, stream=True, verify=False, timeout=15)
         content_type = req.headers.get('content-type', '')
 
