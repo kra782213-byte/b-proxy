@@ -8,21 +8,21 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
+# YENİ DOMAIN VE HEADERS AYARLARI
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://embed.beyazelma78.com/",
-    "Origin": "https://embed.beyazelma78.com"
+    "Referer": "https://embed.elmacibaba.com/",
+    "Origin": "https://embed.elmacibaba.com"
 }
 
 @app.route('/')
 def home():
-    return "BeyazElma Dinamik Proxy Aktif ve Calisiyor!"
+    return "BeyazElma (Elmacibaba) Dinamik Proxy Aktif ve Calisiyor!"
 
-# SENİN İSTEDİĞİ SABİT LİNK YAPISI BURADA
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
-    # IPTV bu linke her tıkladığında, sunucu gidip ANLIK taze linki alır
-    api_url = f"https://embed.beyazelma78.com/api/play/{kanal_id}"
+    # API isteği yeni domain üzerinden yapılıyor
+    api_url = f"https://embed.elmacibaba.com/api/play/{kanal_id}"
     try:
         api_res = requests.get(api_url, headers=HEADERS, verify=False, timeout=10)
         data = api_res.json()
@@ -31,12 +31,10 @@ def play_channel(kanal_id):
         if not stream_url:
             return "Yayin linki bulunamadi", 404
             
-        # Taze linki aldıktan sonra, m3u8 içeriğini proxy'le
         return proxy_stream(stream_url)
     except Exception as e:
         return str(e), 500
 
-# ALT PARÇALARI (.ts) PROXY'LEYEN KISIM
 @app.route('/stream')
 def stream_proxy():
     target_url = request.args.get('url')
