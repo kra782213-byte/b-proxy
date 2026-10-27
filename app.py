@@ -8,52 +8,65 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
+# Tarayıcı taklidi için daha detaylı başlıklar ekledik
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://embed.beyazelma78.com/",
-    "Origin": "https://embed.beyazelma78.com"
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://beyazelma78.com/",
+    "Origin": "https://beyazelma78.com",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site"
 }
 
 @app.route('/')
 def home():
-    return "BeyazElma Proxy Aktif!"
+    return "BeyazElma Proxy Aktif (Session Modu)!"
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     api_url = f"https://embed.beyazelma78.com/api/play/{kanal_id}"
+    
     try:
-        api_res = requests.get(api_url, headers=HEADERS, verify=False, timeout=10)
+        # SESSION KULLANIMI: Çerezleri almak için önce ana siteye gidiyoruz
+        session = requests.Session()
         
-        # JSON okuma hatasını önlemek için kontrol
+        # 1. Ana siteye gir (Çerezleri kapmak için)
+        session.get("https://beyazelma78.com/", headers=HEADERS, verify=False, timeout=10)
+        
+        # 2. Çerezlerle birlikte API'ye istek at
+        api_res = session.get(api_url, headers=HEADERS, verify=False, timeout=10)
+        
         try:
             data = api_res.json()
         except:
-            return f"API JSON dondurmedi. Sunucu Cevabi: {api_res.text} | Denenen API: {api_url}", 500
+            return f"API JSON dondurmedi. Cevap: {api_res.text}", 500
 
-        # Stream URL'sini çek
         stream_url = data.get("primary")
-        
         if not stream_url and "fallbacks" in data and isinstance(data["fallbacks"], list) and len(data["fallbacks"]) > 0:
             stream_url = data["fallbacks"][0]
         
-        # EĞER LİNK YOKSA, BİZE SİTENİN NE DÖNDÜĞÜNÜ GÖSTER (Hata Ayıklama)
         if not stream_url:
-            return f"Yayin linki bulunamadi. Sitenin Dondugu Cevap: {data} | Denenen API: {api_url}", 404
+            return f"Yayin linki bulunamadi. Sitenin Cevabi: {data}", 404
             
-        return proxy_stream(stream_url)
+        return proxy_stream(stream_url, session)
     except Exception as e:
-        return f"Hata: {str(e)} | Denenen API: {api_url}", 500
+        return f"Hata: {str(e)}", 500
 
 @app.route('/stream')
 def stream_proxy():
     target_url = request.args.get('url')
     if not target_url:
         return "URL eksik", 400
-    return proxy_stream(unquote(target_url))
+    return proxy_stream(unquote(target_url), None)
 
-def proxy_stream(target_url):
+def proxy_stream(target_url, existing_session=None):
     try:
-        req = requests.get(target_url, headers=HEADERS, stream=True, verify=False, timeout=15)
+        # Eğer oturum varsa onu kullan, yoksa normal istek at
+        req_session = existing_session if existing_session else requests.Session()
+        
+        req = req_session.get(target_url, headers=HEADERS, stream=True, verify=False, timeout=15)
         content_type = req.headers.get('content-type', '')
 
         if 'mpegurl' in content_type or '.m3u8' in target_url:
