@@ -1,5 +1,5 @@
 from flask import Flask, request, Response
-import requests
+import curl_cffi
 from urllib.parse import quote, unquote
 import re
 import urllib3
@@ -8,51 +8,36 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# Kendini bir iPad (Safari) olarak tanıtan en güncel başlıklar
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "tr-TR,tr;q=0.9",
     "Referer": "https://beyazelma78.com/",
-    "Origin": "https://beyazelma78.com",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
-    "Connection": "keep-alive"
+    "Origin": "https://beyazelma78.com"
 }
 
 @app.route('/')
 def home():
-    return "BeyazElma Proxy Aktif (iPad Modu)!"
+    return "BeyazElma Proxy Aktif (Curl-CFFI)!"
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     api_url = f"https://embed.beyazelma78.com/api/play/{kanal_id}"
-    
     try:
-        session = requests.Session()
-        # Ana siteye iPad olarak girip çerezleri topluyoruz
-        session.get("https://beyazelma78.com/", headers=HEADERS, verify=False, timeout=10)
-        
-        # Embed sitesine de girip oradan da çerez topluyoruz
-        session.get("https://embed.beyazelma78.com/", headers=HEADERS, verify=False, timeout=10)
-
-        # Şimdi API isteğini atıyoruz
-        api_res = session.get(api_url, headers=HEADERS, verify=False, timeout=10)
+        # curl_cffi kullanarak gerçek tarayıcı taklidi yapıyoruz
+        api_res = curl_cffi.get(api_url, headers=HEADERS, impersonate="chrome", verify=False, timeout=10)
         
         try:
             data = api_res.json()
         except:
             return f"API JSON dondurmedi. Cevap: {api_res.text}", 500
 
-        stream_url = data.get("primary")
-        if not stream_url and "fallbacks" in data and isinstance(data["fallbacks"], list) and len(data["fallbacks"]) > 0:
-            stream_url = data["fallbacks"][0]
+        stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
         
         if not stream_url:
             return f"Yayin linki bulunamadi. Sitenin Cevabi: {data}", 404
             
-        return proxy_stream(stream_url, session)
+        return proxy_stream(stream_url)
     except Exception as e:
         return f"Hata: {str(e)}", 500
 
@@ -61,12 +46,11 @@ def stream_proxy():
     target_url = request.args.get('url')
     if not target_url:
         return "URL eksik", 400
-    return proxy_stream(unquote(target_url), None)
+    return proxy_stream(unquote(target_url))
 
-def proxy_stream(target_url, existing_session=None):
+def proxy_stream(target_url):
     try:
-        req_session = existing_session if existing_session else requests.Session()
-        req = req_session.get(target_url, headers=HEADERS, stream=True, verify=False, timeout=15)
+        req = curl_cffi.get(target_url, headers=HEADERS, impersonate="chrome", verify=False, stream=True, timeout=15)
         content_type = req.headers.get('content-type', '')
 
         if 'mpegurl' in content_type or '.m3u8' in target_url:
