@@ -1,6 +1,6 @@
 from flask import Flask, request, Response
 import requests
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote
 import re
 import urllib3
 import time
@@ -9,69 +9,43 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-REDIRECT_URL = "https://elmacibaba.com"
-# Hız için önbellek (Hafıza)
+# Hız için önbellek (Hafıza) - 2 DAKİKA (120 saniye) - Token ölmeden yenilenir
 CACHE = {} 
-CACHE_TIMEOUT = 300 # 5 Dakika
+CACHE_TIMEOUT = 120 
 
-def get_real_domain():
-    try:
-        # Yönlendirmeleri takip et
-        res = requests.get(REDIRECT_URL, allow_redirects=True, timeout=5, verify=False)
-        final_url = res.url
-        parsed_uri = urlparse(final_url)
-        domain = parsed_uri.netloc
-        
-        # t.ly veya elmacibaba gelirse eski çalışan siteye dön
-        if "elmacibaba" in domain or "t.ly" in domain or not domain:
-            return "beyazelma78.com"
-        
-        parts = domain.split('.')
-        if len(parts) >= 2:
-            return f"{parts[-2]}.{parts[-1]}"
-        return domain
-    except Exception:
-        return "beyazelma78.com"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://embed.beyazelma78.com/",
+    "Origin": "https://embed.beyazelma78.com"
+}
 
 @app.route('/')
 def home():
-    return "Akıllı ve Hızlı Proxy Aktif!"
+    return "BeyazElma Turbo Proxy Aktif!"
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     global CACHE
     
-    # 1. Önce önbelleğe (hafızaya) bak
+    # 1. Önce önbelleğe bak (Eğer 2 dakika geçmediyse direkt ver, hızlı açılsın)
     if kanal_id in CACHE:
         cached_url, timestamp = CACHE[kanal_id]
         if time.time() - timestamp < CACHE_TIMEOUT:
-            print(f"[CACHE HIT] {kanal_id}")
             return proxy_stream(cached_url)
             
-    print(f"[CACHE MISS] {kanal_id} - API'ye gidiliyor")
-    real_domain = get_real_domain()
-    embed_domain = f"embed.{real_domain}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": f"https://{embed_domain}/",
-        "Origin": f"https://{embed_domain}"
-    }
-
-    api_url = f"https://{embed_domain}/api/play/{kanal_id}"
+    # 2. Önbellekte yoksa veya süresi geçtiyse API'ye sor
+    api_url = f"https://embed.beyazelma78.com/api/play/{kanal_id}"
     
     try:
-        session = requests.Session()
-        session.get(f"https://{real_domain}/", headers=headers, verify=False, timeout=5)
-        
-        api_res = session.get(api_url, headers=headers, verify=False, timeout=8)
+        api_res = requests.get(api_url, headers=HEADERS, verify=False, timeout=8)
         data = api_res.json()
+        
         stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
         
         if not stream_url:
             return f"Yayin linki bulunamadi.", 404
             
-        # Başarılıysa önbelleğe kaydet
+        # Başarılıysa 2 dakikalığına önbelleğe kaydet
         CACHE[kanal_id] = (stream_url, time.time())
         
         return proxy_stream(stream_url)
@@ -87,12 +61,12 @@ def stream_proxy():
 
 def proxy_stream(target_url):
     try:
-        # Yayın sunucusuna giderken en temel başlıklar
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://beyazelma78.com/"
-        }
-        req = requests.get(target_url, headers=headers, stream=True, verify=False, timeout=10)
+        req = requests.get(target_url, headers=HEADERS, stream=True, verify=False, timeout=10)
+        
+        # Eğer link ölmüşse (403/404) hatayı yakala
+        if req.status_code != 200:
+            return f"Yayin sunucusu yanit vermedi (Status: {req.status_code})", req.status_code
+
         content_type = req.headers.get('content-type', '')
 
         if 'mpegurl' in content_type or '.m3u8' in target_url:
