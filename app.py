@@ -4,7 +4,6 @@ from urllib.parse import quote, unquote
 import re
 import urllib3
 import time
-from bs4 import BeautifulSoup
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -16,59 +15,27 @@ CACHE_TIMEOUT = 120
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept-Language": "tr-TR,tr;q=0.9",
+    "Referer": "https://embed.beyazelma78.com/",
+    "Origin": "https://embed.beyazelma78.com"
 }
 
-def find_real_slug(search_id):
-    """Sitenin kanal listesini tarar ve aranan ID'yi içeren gerçek linki bulur."""
+def try_api(slug):
+    """Verilen ID ile API'ye gidip yayın linkini almayı dener."""
+    api_url = f"https://embed.beyazelma78.com/api/play/{slug}"
     try:
-        clean_term = search_id.lower()
-        # Eğer kullanıcı tr- yazdıysa temizle
-        if clean_term.startswith("tr-"):
-            clean_term = clean_term[3:]
-
-        # Sitenin kanal listesini çek
-        res = requests.get("https://beyazelma78.com/kanallar", headers=HEADERS, verify=False, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        all_links = []
-        for a in soup.find_all('a', href=True):
-            if '/kanal/' in a['href']:
-                all_links.append(a['href'].split('/')[-1])
-
-        # 1. Öncelik: Tam eşleşme veya aranan kelimeyi içeren en yakın link
-        for slug in all_links:
-            if clean_term in slug:
-                return slug
-        return None
-    except Exception as e:
-        return None
-
-def get_real_stream(real_slug):
-    """Bulunan gerçek ID ile API'ye gidip yayın linkini alır."""
-    try:
-        page_url = f"https://beyazelma78.com/kanal/{real_slug}"
-        res = requests.get(page_url, headers=HEADERS, verify=False, timeout=10)
-        
-        embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', res.text)
-        if not embed_paths: return None
-        
-        embed_full_url = "https://beyazelma78.com" + list(set(embed_paths))[0]
-        embed_res = requests.get(embed_full_url, headers=HEADERS, verify=False, timeout=10)
-        slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
-        if not slug_match: return None
-        
-        api_slug = slug_match.group(1)
-        api_url = f"https://embed.beyazelma78.com/api/play/{api_slug}"
-        api_res = requests.get(api_url, headers=HEADERS, verify=False, timeout=10)
-        data = api_res.json()
-        
-        return data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
-    except Exception:
-        return None
+        res = requests.get(api_url, headers=HEADERS, verify=False, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            stream = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
+            if stream:
+                return stream
+    except:
+        pass
+    return None
 
 @app.route('/')
 def home():
-    return "BeyazElma Dinamik Tarayici Aktif!"
+    return "BeyazElma Akilli Varyasyon Sunucusu Aktif!"
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
@@ -76,20 +43,42 @@ def play_channel(kanal_id):
         if (time.time() - CACHE[kanal_id][1]) < CACHE_TIMEOUT:
             return proxy_stream(CACHE[kanal_id][0])
 
-    # Siteden o anki gerçek ID'yi bul
-    real_slug = find_real_slug(kanal_id)
+    # 1. Gelen ismin temel halini al (tr- ve -fhd gibi ekleri temizle)
+    clean_name = kanal_id.lower()
+    if clean_name.startswith("tr-"):
+        clean_name = clean_name[3:]
     
-    if not real_slug:
-        # Eğer bulamazsa, belki zaten gerçek ID'dir diye doğrudan denesin
-        real_slug = kanal_id
+    for suffix in ["-fhd", "-hd", "-4k", "-live-during-events-only", "-hd-2", "-fhd-2", "-live"]:
+        if clean_name.endswith(suffix):
+            clean_name = clean_name[:-len(suffix)]
 
-    stream_url = get_real_stream(real_slug)
+    # 2. Olası tüm varyasyonları oluştur (Sadece en yaygın olanlar)
+    variations = [
+        kanal_id,                                      # İlk olarak gelen ismi dene
+        f"tr-{clean_name}",                            # tr-bein-sports-1
+        f"tr-{clean_name}-fhd",                        # tr-bein-sports-1-fhd
+        f"tr-{clean_name}-hd",                         # tr-bein-sports-1-hd
+        f"tr-{clean_name}-hd-2",                       # tr-bein-sports-1-hd-2
+        f"tr-{clean_name}-fhd-2",                      # tr-bein-sports-1-fhd-2
+        f"tr-{clean_name}-live-during-events-only",    # tr-bein-sports-1-live...
+        clean_name,                                    # bein-sports-1
+        f"{clean_name}-fhd",                           # bein-sports-1-fhd
+        f"{clean_name}-hd",                            # bein-sports-1-hd
+        f"{clean_name}-live-during-events-only"        # bein-sports-1-live...
+    ]
     
-    if stream_url:
-        CACHE[kanal_id] = (stream_url, time.time())
-        return proxy_stream(stream_url)
+    # Tekrarları kaldır
+    variations = list(dict.fromkeys(variations))
 
-    return f"Kanal bulunamadi. Aranan: {kanal_id}, Sitede Bulunan: {real_slug}", 404
+    # 3. Varyasyonları sırayla dene
+    for slug in variations:
+        stream_url = try_api(slug)
+        if stream_url:
+            # Bulunca 2 dakikalığına hafızaya kaydet (hız için)
+            CACHE[kanal_id] = (stream_url, time.time())
+            return proxy_stream(stream_url)
+
+    return f"Kanal bulunamadi. Tum varyasyonlar denendi: {', '.join(variations)}", 404
 
 @app.route('/stream')
 def stream_proxy():
