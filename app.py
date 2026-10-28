@@ -19,37 +19,33 @@ HEADERS = {
 }
 
 def find_real_slug(search_id):
-    """Sitenin kanal listesine gider ve aranan ID'yi (örn: bein-sports-2) içeren gerçek linki bulur."""
+    """Sitenin kanal listesini tarar ve aranan ID'yi içeren gerçek linki bulur."""
     try:
-        # Arama terimini temizle (tr-, -fhd, -hd gibi ekleri at)
         clean_term = search_id.lower()
-        for prefix in ["tr-", "de-", "en-"]:
-            if clean_term.startswith(prefix):
-                clean_term = clean_term.replace(prefix, "")
-        for suffix in ["-fhd", "-hd", "-4k", "-live-during-events-only", "-live", "-2"]:
-            if clean_term.endswith(suffix):
-                clean_term = clean_term.replace(suffix, "")
+        # Eğer kullanıcı tr- yazdıysa temizle
+        if clean_term.startswith("tr-"):
+            clean_term = clean_term[3:]
 
         # Sitenin kanal listesini çek
         res = requests.get("https://beyazelma78.com/kanallar", headers=HEADERS, verify=False, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # Sayfadaki tüm kanal linklerini tara
+        all_links = []
         for a in soup.find_all('a', href=True):
-            href = a['href']
-            if '/kanal/' in href and clean_term in href.lower():
-                # Aranan kanalı bulduk! Gerçek ID'yi (slug) döndür
-                real_slug = href.split('/')[-1]
-                return real_slug
+            if '/kanal/' in a['href']:
+                all_links.append(a['href'].split('/')[-1])
+
+        # 1. Öncelik: Tam eşleşme veya aranan kelimeyi içeren en yakın link
+        for slug in all_links:
+            if clean_term in slug:
+                return slug
         return None
     except Exception as e:
-        print(f"Arama hatası: {e}")
         return None
 
 def get_real_stream(real_slug):
     """Bulunan gerçek ID ile API'ye gidip yayın linkini alır."""
     try:
-        # Kanal sayfasına git (iframe'i bulmak için)
         page_url = f"https://beyazelma78.com/kanal/{real_slug}"
         res = requests.get(page_url, headers=HEADERS, verify=False, timeout=10)
         
@@ -76,26 +72,24 @@ def home():
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
-    # Önbellekte varsa anında dön
     if kanal_id in CACHE:
         if (time.time() - CACHE[kanal_id][1]) < CACHE_TIMEOUT:
             return proxy_stream(CACHE[kanal_id][0])
 
-    # 1. Siteden gerçek ismi bul
+    # Siteden o anki gerçek ID'yi bul
     real_slug = find_real_slug(kanal_id)
     
     if not real_slug:
-        # Eğer tam eşleşme bulamazsa (örn: s-sport-plus-2 gibi), belki doğrudan ID'dir diye deneyelim
+        # Eğer bulamazsa, belki zaten gerçek ID'dir diye doğrudan denesin
         real_slug = kanal_id
 
-    # 2. Bulunan gerçek isimle yayın linkini çek
     stream_url = get_real_stream(real_slug)
     
     if stream_url:
         CACHE[kanal_id] = (stream_url, time.time())
         return proxy_stream(stream_url)
 
-    return f"Kanal bulunamadi. Aranan: {kanal_id}, Bulunan ID: {real_slug}", 404
+    return f"Kanal bulunamadi. Aranan: {kanal_id}, Sitede Bulunan: {real_slug}", 404
 
 @app.route('/stream')
 def stream_proxy():
