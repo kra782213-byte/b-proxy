@@ -18,31 +18,23 @@ HEADERS = {
 }
 
 def get_real_stream(page_url):
-    """Kanal sayfasına gidip gerçek m3u8 linkini ve API ID'sini bulur."""
+    """Kanal sayfasına gidip gerçek m3u8 linkini bulur."""
     try:
         res = requests.get(page_url, headers=HEADERS, verify=False, timeout=10)
-        
-        # Sayfadaki embed linkini bul (örn: /api/embed?u=...)
         embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', res.text)
         if not embed_paths: return None
         
         embed_full_url = "https://beyazelma78.com" + list(set(embed_paths))[0]
-        
-        # Embed sayfasına git ve gizli 'slug' değerini al
         embed_res = requests.get(embed_full_url, headers=HEADERS, verify=False, timeout=10)
         slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
         if not slug_match: return None
         
         real_slug = slug_match.group(1)
-        
-        # API'den o anki yayın linkini al
         api_url = f"https://embed.beyazelma78.com/api/play/{real_slug}"
         api_res = requests.get(api_url, headers=HEADERS, verify=False, timeout=10)
         data = api_res.json()
         
-        stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
-        return stream_url
-        
+        return data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
     except Exception:
         return None
 
@@ -56,14 +48,14 @@ def play_channel(kanal_id):
         if (time.time() - CACHE[kanal_id][1]) < CACHE_TIMEOUT:
             return proxy_stream(CACHE[kanal_id][0])
 
-    # Sitenin kanal URL yapısı: https://beyazelma78.com/kanal/tr-bein-sports-2
+    # Yeni URL yapısı: tr- öneki YOK
     page_url = f"https://beyazelma78.com/kanal/{kanal_id}"
     
     stream_url = get_real_stream(page_url)
     
-    # Eğer bulamazsa, belki kanal adı "-fhd" veya "-hd" olarak değişmiştir. Onları da dene.
+    # Eğer bulamazsa, bazı kanalların sonunda -fhd, -hd gibi ekler olabilir
     if not stream_url:
-        for suffix in ["-fhd", "-hd", "-live-during-events-only", "-fhd-2"]:
+        for suffix in ["-fhd", "-hd", "-4k"]:
             stream_url = get_real_stream(f"{page_url}{suffix}")
             if stream_url: break
 
