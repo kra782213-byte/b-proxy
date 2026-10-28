@@ -12,35 +12,31 @@ app = Flask(__name__)
 CACHE = {}
 CACHE_TIMEOUT = 120 
 
+# Tarayıcı taklidi ve doğru Referer
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "tr-TR,tr;q=0.9",
+    "Referer": "https://embed.beyazelma78.com/",
+    "Origin": "https://embed.beyazelma78.com",
+    "Accept": "application/json, text/plain, */*"
 }
 
-def get_real_stream(page_url):
-    """Kanal sayfasına gidip gerçek m3u8 linkini bulur."""
+def try_api(slug):
+    """Verilen ID ile API'ye gidip yayın linkini almayı dener."""
+    api_url = f"https://embed.beyazelma78.com/api/play/{slug}"
     try:
-        res = requests.get(page_url, headers=HEADERS, verify=False, timeout=10)
-        embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', res.text)
-        if not embed_paths: return None
-        
-        embed_full_url = "https://beyazelma78.com" + list(set(embed_paths))[0]
-        embed_res = requests.get(embed_full_url, headers=HEADERS, verify=False, timeout=10)
-        slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
-        if not slug_match: return None
-        
-        real_slug = slug_match.group(1)
-        api_url = f"https://embed.beyazelma78.com/api/play/{real_slug}"
-        api_res = requests.get(api_url, headers=HEADERS, verify=False, timeout=10)
-        data = api_res.json()
-        
-        return data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
-    except Exception:
-        return None
+        res = requests.get(api_url, headers=HEADERS, verify=False, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            stream = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
+            if stream:
+                return stream
+    except:
+        pass
+    return None
 
 @app.route('/')
 def home():
-    return "BeyazElma Akilli Sunucu Aktif!"
+    return "BeyazElma Akilli API Sunucusu Aktif!"
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
@@ -48,22 +44,26 @@ def play_channel(kanal_id):
         if (time.time() - CACHE[kanal_id][1]) < CACHE_TIMEOUT:
             return proxy_stream(CACHE[kanal_id][0])
 
-    # Yeni URL yapısı: tr- öneki YOK
-    page_url = f"https://beyazelma78.com/kanal/{kanal_id}"
-    
-    stream_url = get_real_stream(page_url)
-    
-    # Eğer bulamazsa, bazı kanalların sonunda -fhd, -hd gibi ekler olabilir
-    if not stream_url:
-        for suffix in ["-fhd", "-hd", "-4k"]:
-            stream_url = get_real_stream(f"{page_url}{suffix}")
-            if stream_url: break
+    # Kanal ID'sinin olası tüm varyasyonlarını dene (Site sürekli değiştiriyor)
+    slugs_to_try = [
+        kanal_id,                                      # tr-bein-sports-2
+        f"{kanal_id}-fhd",                             # tr-bein-sports-2-fhd
+        f"{kanal_id}-hd",                              # tr-bein-sports-2-hd
+        f"{kanal_id}-hd-2",                            # tr-bein-sports-2-hd-2
+        f"{kanal_id}-live-during-events-only",         # tr-bein-sports-2-live-during-events-only
+        kanal_id.replace("tr-", ""),                   # bein-sports-2 (Belki tr- öneki kalkmıştır)
+        f"{kanal_id.replace('tr-', '')}-fhd",          # bein-sports-2-fhd
+        f"{kanal_id.replace('tr-', '')}-hd"            # bein-sports-2-hd
+    ]
 
-    if not stream_url:
-        return f"Kanal bulunamadi. Denenen URL: {page_url}", 404
+    for slug in slugs_to_try:
+        stream_url = try_api(slug)
+        if stream_url:
+            # Bulunca hafızaya kaydet (hız için)
+            CACHE[kanal_id] = (stream_url, time.time())
+            return proxy_stream(stream_url)
 
-    CACHE[kanal_id] = (stream_url, time.time())
-    return proxy_stream(stream_url)
+    return f"Kanal bulunamadi. Denenen ID'ler: {', '.join(slugs_to_try)}", 404
 
 @app.route('/stream')
 def stream_proxy():
