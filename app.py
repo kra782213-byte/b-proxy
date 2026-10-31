@@ -1,117 +1,49 @@
-from flask import Flask, request, Response
+from flask import Flask, Response
 import requests
-from urllib.parse import quote, unquote
-import re
 import urllib3
-import time
+import re
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-CACHE = {}
-CACHE_TIMEOUT = 120 
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "tr-TR,tr;q=0.9",
-    "Referer": "https://embed.beyazelma78.com/",
-    "Origin": "https://embed.beyazelma78.com"
-}
-
-def try_api(slug):
-    """Verilen ID ile API'ye gidip yayın linkini almayı dener."""
-    api_url = f"https://embed.beyazelma78.com/api/play/{slug}"
+@app.route('/liste.m3u')
+def generate_m3u():
     try:
-        res = requests.get(api_url, headers=HEADERS, verify=False, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            stream = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
-            if stream:
-                return stream
-    except:
-        pass
-    return None
-
-@app.route('/')
-def home():
-    return "BeyazElma Akilli Varyasyon Sunucusu Aktif!"
-
-@app.route('/play/<kanal_id>')
-def play_channel(kanal_id):
-    if kanal_id in CACHE:
-        if (time.time() - CACHE[kanal_id][1]) < CACHE_TIMEOUT:
-            return proxy_stream(CACHE[kanal_id][0])
-
-    # 1. Gelen ismin temel halini al (tr- ve -fhd gibi ekleri temizle)
-    clean_name = kanal_id.lower()
-    if clean_name.startswith("tr-"):
-        clean_name = clean_name[3:]
-    
-    for suffix in ["-fhd", "-hd", "-4k", "-live-during-events-only", "-hd-2", "-fhd-2", "-live"]:
-        if clean_name.endswith(suffix):
-            clean_name = clean_name[:-len(suffix)]
-
-    # 2. Olası tüm varyasyonları oluştur (Sadece en yaygın olanlar)
-    variations = [
-        kanal_id,                                      # İlk olarak gelen ismi dene
-        f"tr-{clean_name}",                            # tr-bein-sports-1
-        f"tr-{clean_name}-fhd",                        # tr-bein-sports-1-fhd
-        f"tr-{clean_name}-hd",                         # tr-bein-sports-1-hd
-        f"tr-{clean_name}-hd-2",                       # tr-bein-sports-1-hd-2
-        f"tr-{clean_name}-fhd-2",                      # tr-bein-sports-1-fhd-2
-        f"tr-{clean_name}-live-during-events-only",    # tr-bein-sports-1-live...
-        clean_name,                                    # bein-sports-1
-        f"{clean_name}-fhd",                           # bein-sports-1-fhd
-        f"{clean_name}-hd",                            # bein-sports-1-hd
-        f"{clean_name}-live-during-events-only"        # bein-sports-1-live...
-    ]
-    
-    # Tekrarları kaldır
-    variations = list(dict.fromkeys(variations))
-
-    # 3. Varyasyonları sırayla dene
-    for slug in variations:
-        stream_url = try_api(slug)
-        if stream_url:
-            # Bulunca 2 dakikalığına hafızaya kaydet (hız için)
-            CACHE[kanal_id] = (stream_url, time.time())
-            return proxy_stream(stream_url)
-
-    return f"Kanal bulunamadi. Tum varyasyonlar denendi: {', '.join(variations)}", 404
-
-@app.route('/stream')
-def stream_proxy():
-    target_url = request.args.get('url')
-    if not target_url:
-        return "URL eksik", 400
-    return proxy_stream(unquote(target_url))
-
-def proxy_stream(target_url):
-    try:
-        req = requests.get(target_url, headers=HEADERS, stream=True, verify=False, timeout=10)
-        content_type = req.headers.get('content-type', '')
+        # Sitenin kanallar sayfasına git
+        res = requests.get("https://beyazelma78.com/kanallar", headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "tr-TR,tr;q=0.9"
+        }, verify=False, timeout=10)
         
-        if 'mpegurl' in content_type or '.m3u8' in target_url:
-            text = req.text
-            base_url = target_url[:target_url.rfind('/')+1]
+        # Kanalları ve linkleri regex ile çek
+        regex = re.compile(r'href="/kanal/([^"]+)"[\s\S]*?class="site-channel-row-name">([^<]+)<')
+        matches = regex.findall(res.text)
+        
+        m3u = "#EXTM3U\n"
+        for kanal_id, name in matches:
+            name = name.strip()
+            # Video linkini DOĞRUDAN veriyoruz. Render video sunmuyor!
+            # Referer ve User-Agent ayarlarını da listeye ekliyoruz
+            m3u += f'#EXTINF:-1, {name}\n'
+            m3u += f'#EXTVLCOPT:http-referrer=https://embed.beyazelma78.com/\n'
+            m3u += f'#EXTVLCOPT:http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)\n'
             
-            new_lines = []
-            for line in text.split('\n'):
-                line = line.strip()
-                if line == "": continue
-                
-                if line.startswith("#"):
-                    line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{request.host_url}stream?url={quote(m.group(1) if m.group(1).startswith("http") else base_url + m.group(1))}"', line)
-                    new_lines.append(line)
-                else:
-                    if not line.startswith("http"):
-                        line = base_url + line
-                    new_lines.append(f"{request.host_url}stream?url={quote(line)}")
+            # API'den o anki yayın linkini çek (Sadece API'ye istek atıyor, video indirmiyor)
+            api_url = f"https://embed.beyazelma78.com/api/play/{kanal_id}"
+            api_res = requests.get(api_url, headers={"Referer": "https://embed.beyazelma78.com/"}, verify=False, timeout=5)
+            if api_res.status_code == 200:
+                data = api_res.json()
+                stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
+                if stream_url:
+                    # Linki doğrudan listeye yazıyoruz, Render üzerinden geçirmiyoruz
+                    m3u += f"{stream_url}\n"
+                    continue
             
-            return Response('\n'.join(new_lines), content_type='application/vnd.apple.mpegurl')
-            
-        return Response(req.iter_content(chunk_size=1024*1024), content_type=content_type, direct_passthrough=True)
+            # Eğer link bulunamazsa API'nin kendi linkini ver (en azından dener)
+            m3u += f"https://embed.beyazelma78.com/api/play/{kanal_id}\n"
+
+        return Response(m3u, mimetype='application/x-mpegurl')
     except Exception as e:
         return str(e), 500
 
