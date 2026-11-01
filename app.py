@@ -17,19 +17,20 @@ LAST_CHECK_TIME = 0
 def get_real_domain(force_check=False):
     global CACHED_DOMAIN, LAST_CHECK_TIME
     
-    # Eğer zorla kontrol denmediyse ve hafızada domain varsa, direkt onu ver (Hız için)
+    # Hafızada domain varsa ve zorla kontrol denmediyse direkt dön
     if not force_check and CACHED_DOMAIN:
         return CACHED_DOMAIN
 
     try:
         print("Domain kontrol ediliyor (elmacibaba.com)...")
+        # elmacibaba'ya git ve yönlendirmeyi takip et
         res = curl_cffi.get("https://elmacibaba.com", impersonate="chrome", allow_redirects=True, verify=False, timeout=10)
         final_url = res.url
         parsed = urlparse(final_url)
         domain = parsed.netloc
 
-        # Eğer t.ly veya elmacibaba gelirse, varsayılan siteye dön
-        if "elmacibaba" in domain or "t.ly" in domain or not domain:
+        # Eğer yönlendirme t.ly'ye veya elmacibaba'ya gidiyorsa veya domain boşsa, varsayılana dön
+        if "elmacibaba" in domain or "t.ly" in domain or not domain or "beyazelma" not in domain:
             domain = "beyazelma78.com"
         else:
             parts = domain.split('.')
@@ -37,18 +38,21 @@ def get_real_domain(force_check=False):
                 domain = f"{parts[-2]}.{parts[-1]}"
 
         CACHED_DOMAIN = domain
-        print(f"Yeni domain bulundu ve hafızaya alındı: {CACHED_DOMAIN}")
+        print(f"Kullanılacak Domain: {CACHED_DOMAIN}")
         return CACHED_DOMAIN
 
     except Exception as e:
-        print(f"Domain bulma hatasi: {e}")
-        return CACHED_DOMAIN
+        print(f"Domain bulma hatasi (Varsayılana dönülüyor): {e}")
+        return "beyazelma78.com" # Hata olursa eski güvenli limana dön
 
-# --- LİSTE OLUŞTURMA (IPTV'de "Güncelle" dediğinde çalışır) ---
+@app.route('/')
+def home():
+    return "BeyazElma Proxy Aktif ve Calisiyor!"
+
 @app.route('/liste.m3u')
 def generate_m3u():
     try:
-        # LİSTE GÜNCELLENİRKEN domaini zorla kontrol et (elmacibaba'ya git)
+        # Liste istenirken domaini kontrol et
         current_domain = get_real_domain(force_check=True)
         url = f"https://{current_domain}/kanallar"
         
@@ -71,11 +75,10 @@ def generate_m3u():
     except Exception as e:
         return str(e), 500
 
-# --- KANAL OYNATMA (Kanala tıkladığında çalışır) ---
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     try:
-        # KANAL AÇILIRKEN domaini zorla kontrol etme, hafızadakini kullan (Hız için)
+        # Kanala tıklanınca domaini kontrol etme, hafızadakini kullan (Hız için)
         current_domain = get_real_domain(force_check=False)
         embed_domain = f"embed.{current_domain}"
         
@@ -90,7 +93,7 @@ def play_channel(kanal_id):
         
         embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', page_res.text)
         if not embed_paths:
-            return f"Embed linki bulunamadi. Domain: {current_domain}", 404
+            return f"Embed linki bulunamadi. Domain: {current_domain} | HTTP: {page_res.status_code}", 404
             
         embed_url = f"https://{current_domain}" + embed_paths[0]
         embed_res = curl_cffi.get(embed_url, impersonate="chrome", headers=headers, verify=False, timeout=10)
