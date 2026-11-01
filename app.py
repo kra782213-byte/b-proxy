@@ -8,10 +8,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# UPTIMEROBOT'UN SUNUCUYU UYANDIRMASI İÇİN ANA SAYFA EKLENDİ
-@app.route('/')
-def home():
-    return "BeyazElma Proxy Aktif ve Calisiyor!"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://beyazelma78.com/"
+}
 
 @app.route('/liste.m3u')
 def generate_m3u():
@@ -38,31 +38,39 @@ def generate_m3u():
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     try:
+        # 1. Kanal sayfasına git
         page_url = f"https://beyazelma78.com/kanal/{kanal_id}"
-        page_res = curl_cffi.get(page_url, impersonate="chrome", headers={"Referer": "https://beyazelma78.com/"}, verify=False, timeout=10)
+        page_res = curl_cffi.get(page_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=10)
         
+        # 2. Sayfa içinden gizli embed linkini bul (örn: /api/embed?u=...)
         embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', page_res.text)
         if not embed_paths:
-            return f"Embed linki bulunamadi.", 404
+            return f"Embed linki bulunamadi. (Sayfa acildi ama iframe yok)", 404
             
         embed_url = "https://beyazelma78.com" + embed_paths[0]
-        embed_res = curl_cffi.get(embed_url, impersonate="chrome", headers={"Referer": "https://beyazelma78.com/"}, verify=False, timeout=10)
+        
+        # 3. Embed sayfasına git ve asıl slug değerini çek
+        embed_res = curl_cffi.get(embed_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=10)
         slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
         
         if not slug_match:
-            return f"Slug bulunamadi.", 404
+            return f"Slug bulunamadi (Embed sayfasi acildi ama kod farkli).", 404
             
         real_slug = slug_match.group(1)
+        
+        # 4. Gerçek slug ile API'ye istek at
         api_url = f"https://embed.beyazelma78.com/api/play/{real_slug}"
-        api_res = curl_cffi.get(api_url, impersonate="chrome", headers={"Referer": "https://embed.beyazelma78.com/"}, verify=False, timeout=10)
+        api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=10)
         
         if api_res.status_code == 200:
             data = api_res.json()
             stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
             if stream_url:
+                # Başarılı! Yayına yönlendir
                 return redirect(stream_url, code=302)
         
-        return f"Yayin alinamadi.", 404
+        return f"Yayin linki alinamadi. Gercek Slug: {real_slug} | API Kodu: {api_res.status_code}", 404
+        
     except Exception as e:
         return f"Hata: {str(e)}", 500
 
