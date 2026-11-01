@@ -47,25 +47,17 @@ def generate_m3u():
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
-    # ID'yi temizle (eğer sonunda .m3u8 varsa)
     clean_id = kanal_id.replace(".m3u8", "")
     
-    # Sitedeki olası tüm ID varyasyonları (API'nin sevdiği formatı bulmak için)
+    # Sadece sitenin kullandığı gerçek ID ve onun "tr-" önekli halini dene.
+    # FHD veya 4K'yı birbirine karıştırma!
     variations = [
         clean_id, 
-        f"tr-{clean_id}", 
-        f"tr-{clean_id}-4k", 
-        f"tr-{clean_id}-hd",
-        clean_id.replace("-fhd", ""),
-        clean_id.replace("-4k", "")
+        f"tr-{clean_id}"
     ]
-    
-    # Tekrarları kaldır
-    variations = list(dict.fromkeys(variations))
 
     for slug in variations:
         try:
-            # API'ye taze link için sor
             api_url = f"{EMBED_URL}/api/play/{slug}"
             api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
             
@@ -74,14 +66,12 @@ def play_channel(kanal_id):
                 stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
                 
                 if stream_url:
-                    # Başarılı! M3U8 metnini indir
                     m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
                     
                     if m3u8_res.status_code == 200:
                         base_url = stream_url[:stream_url.rfind('/')+1]
                         new_lines = []
                         
-                        # Parçaları Cloudflare Worker'a yönlendir
                         for line in m3u8_res.text.split('\n'):
                             line = line.strip()
                             if line == "": continue
@@ -98,8 +88,7 @@ def play_channel(kanal_id):
         except Exception:
             continue
             
-    # Eğer hiçbiri tutmazsa detaylı hata ver
-    return f"API Hatasi: Tum varyasyonlar denendi ama bulunamadi. (ID: {clean_id})", 404
+    return f"Kanal su an yayinda degil veya API kapali. (ID: {clean_id})", 404
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
