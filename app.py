@@ -19,39 +19,6 @@ HEADERS = {
     "Origin": EMBED_URL
 }
 
-def find_real_id(clean_id):
-    """Eğer ID değişmişse siteden gerçek güncel ID'yi bulur."""
-    try:
-        res = curl_cffi.get(f"{BASE_URL}/kanallar", impersonate="chrome", verify=False, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        links = [a['href'].split('/')[-1] for a in soup.select('a[href^="/kanal/"]')]
-
-        # 1. Birebir aynı mı?
-        if clean_id in links: return clean_id
-
-        # 2. tr- öneki eklenmiş hali mi?
-        if f"tr-{clean_id}" in links: return f"tr-{clean_id}"
-
-        # 3. Kullanıcı -fhd dediyse ve sitede o kelimeyi içeren bir link varsa (4k ile karışmasın diye)
-        if "-fhd" in clean_id:
-            matches = [l for l in links if clean_id.replace("-fhd", "") in l and "-fhd" in l]
-            if matches: return matches[0]
-
-        # 4. Kullanıcı -4k dediyse...
-        if "-4k" in clean_id:
-            matches = [l for l in links if clean_id.replace("-4k", "") in l and "-4k" in l]
-            if matches: return matches[0]
-
-        # 5. Son çare: Sadece temel ismi (bein-sports-1) içeren ilk linki al
-        base_name = clean_id.replace("-fhd", "").replace("-hd", "").replace("-4k", "")
-        for link in links:
-            if base_name in link:
-                return link
-
-        return clean_id
-    except:
-        return clean_id
-
 @app.route('/')
 def home():
     return "Vercel ve Cloudflare Hibrit Sistem Aktif!"
@@ -81,15 +48,32 @@ def generate_m3u():
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     clean_id = kanal_id.replace(".m3u8", "")
-    real_id = find_real_id(clean_id)
     
     try:
-        # Gerçek bulunan ID ile API'ye git
-        api_url = f"{EMBED_URL}/api/play/{real_id}"
+        # 1. Kanal sayfasına git ve gizli iframe'i bul
+        page_url = f"{BASE_URL}/kanal/{clean_id}"
+        page_res = curl_cffi.get(page_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+        
+        embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', page_res.text)
+        if not embed_paths:
+            return f"Embed linki bulunamadi. (ID: {clean_id})", 404
+            
+        # 2. Iframe sayfasına git ve gerçek gizli "slug" değerini al
+        embed_url = f"{BASE_URL}" + embed_paths[0]
+        embed_res = curl_cffi.get(embed_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+        slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
+        
+        if not slug_match:
+            return "Gercek slug bulunamadi.", 404
+            
+        real_slug = slug_match.group(1)
+        
+        # 3. Gerçek slug ile API'den taze token'ı al
+        api_url = f"{EMBED_URL}/api/play/{real_slug}"
         api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if api_res.status_code != 200:
-            return f"API Hatasi: {api_res.status_code} (Aranan: {clean_id}, Bulunan: {real_id})", 404
+            return f"API Hatasi: {api_res.status_code} (ID: {real_slug})", 404
             
         data = api_res.json()
         stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
@@ -97,7 +81,7 @@ def play_channel(kanal_id):
         if not stream_url:
             return "Yayin linki bulunamadi", 404
             
-        # M3U8 metnini indir (Vercel'i yormaz)
+        # 4. M3U8 metnini indir ve içindeki .ts parçalarını Cloudflare'e yönlendir
         m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if m3u8_res.status_code != 200:
@@ -106,7 +90,6 @@ def play_channel(kanal_id):
         base_url = stream_url[:stream_url.rfind('/')+1]
         new_lines = []
         
-        # Parçaları Cloudflare Worker'a yönlendir (2 dakika sınırını aşmak için)
         for line in m3u8_res.text.split('\n'):
             line = line.strip()
             if line == "": continue
