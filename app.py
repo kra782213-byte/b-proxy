@@ -11,8 +11,6 @@ app = Flask(__name__)
 
 BASE_URL = "https://beyazelma78.com"
 EMBED_URL = "https://embed.beyazelma78.com"
-
-# CLOUDFLARE WORKER ADRESİN
 WORKER_URL = "https://beyazelma-proxy.najsjskak80.workers.dev"
 
 HEADERS = {
@@ -41,7 +39,6 @@ def generate_m3u():
             kanal_id = href.split('/')[-1]
             
             m3u += f'#EXTINF:-1, {name}\n'
-            # Kanallar Vercel'e bağlanır, Vercel m3u8'i hazırlar
             m3u += f"https://b-proxy-delta.vercel.app/play/{kanal_id}\n"
             
         return Response(m3u, mimetype='application/x-mpegurl')
@@ -51,12 +48,31 @@ def generate_m3u():
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     try:
-        # Taze token'ı al
-        api_url = f"{EMBED_URL}/api/play/{kanal_id}"
+        real_slug = kanal_id
+        
+        # 1. Siteden gerçek güncel ID'yi bul (Senin tıkladığın ID değişmiş olabilir)
+        try:
+            # Önce doğrudan API'yi deneyelim
+            test_api = curl_cffi.get(f"{EMBED_URL}/api/play/{real_slug}", impersonate="chrome", headers=HEADERS, verify=False, timeout=5)
+            
+            # Eğer API 404 dönerse, siteden doğru ismi bulalım
+            if test_api.status_code == 404:
+                res = curl_cffi.get(f"{BASE_URL}/kanallar", impersonate="chrome", verify=False, timeout=5)
+                soup = BeautifulSoup(res.text, "html.parser")
+                for a in soup.select('a[href^="/kanal/"]'):
+                    # Eğer senin istediğin isim (örneğin bein-sports-1) linkin içinde geçiyorsa
+                    if kanal_id in a['href']:
+                        real_slug = a['href'].split('/')[-1]
+                        break
+        except:
+            pass
+
+        # 2. Gerçek ID ile taze token'ı al
+        api_url = f"{EMBED_URL}/api/play/{real_slug}"
         api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if api_res.status_code != 200:
-            return f"API Hatasi: {api_res.status_code}", 404
+            return f"API Hatasi: {api_res.status_code} (Aranan: {kanal_id}, Bulunan: {real_slug})", 404
             
         data = api_res.json()
         stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
@@ -64,7 +80,7 @@ def play_channel(kanal_id):
         if not stream_url:
             return "Yayin linki bulunamadi", 404
             
-        # M3u8 metnini indir (Bu sadece birkaç KB'lık bir yazıdır, Vercel'i yormaz)
+        # 3. M3u8 metnini indir
         m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if m3u8_res.status_code != 200:
@@ -73,7 +89,7 @@ def play_channel(kanal_id):
         base_url = stream_url[:stream_url.rfind('/')+1]
         new_lines = []
         
-        # M3u8 içindeki .ts video parçalarını Cloudflare Worker'a yönlendir
+        # Parçaları Cloudflare Worker'a yönlendir
         for line in m3u8_res.text.split('\n'):
             line = line.strip()
             if line == "": continue
@@ -86,7 +102,6 @@ def play_channel(kanal_id):
                     line = base_url + line
                 new_lines.append(f"{WORKER_URL}/stream?url={quote(line)}")
                 
-        # IPTV'ye Cloudflare linkleriyle dolu m3u8'i ver
         return Response('\n'.join(new_lines), mimetype='application/vnd.apple.mpegurl')
         
     except Exception as e:
