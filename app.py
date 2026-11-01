@@ -11,7 +11,6 @@ app = Flask(__name__)
 
 BASE_URL = "https://beyazelma78.com"
 EMBED_URL = "https://embed.beyazelma78.com"
-# Cloudflare Worker adresin
 WORKER_URL = "https://beyazelma-proxy.najsjskak80.workers.dev"
 
 HEADERS = {
@@ -19,6 +18,39 @@ HEADERS = {
     "Referer": f"{EMBED_URL}/",
     "Origin": EMBED_URL
 }
+
+def find_real_id(clean_id):
+    """Eğer ID değişmişse siteden gerçek güncel ID'yi bulur."""
+    try:
+        res = curl_cffi.get(f"{BASE_URL}/kanallar", impersonate="chrome", verify=False, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
+        links = [a['href'].split('/')[-1] for a in soup.select('a[href^="/kanal/"]')]
+
+        # 1. Birebir aynı mı?
+        if clean_id in links: return clean_id
+
+        # 2. tr- öneki eklenmiş hali mi?
+        if f"tr-{clean_id}" in links: return f"tr-{clean_id}"
+
+        # 3. Kullanıcı -fhd dediyse ve sitede o kelimeyi içeren bir link varsa (4k ile karışmasın diye)
+        if "-fhd" in clean_id:
+            matches = [l for l in links if clean_id.replace("-fhd", "") in l and "-fhd" in l]
+            if matches: return matches[0]
+
+        # 4. Kullanıcı -4k dediyse...
+        if "-4k" in clean_id:
+            matches = [l for l in links if clean_id.replace("-4k", "") in l and "-4k" in l]
+            if matches: return matches[0]
+
+        # 5. Son çare: Sadece temel ismi (bein-sports-1) içeren ilk linki al
+        base_name = clean_id.replace("-fhd", "").replace("-hd", "").replace("-4k", "")
+        for link in links:
+            if base_name in link:
+                return link
+
+        return clean_id
+    except:
+        return clean_id
 
 @app.route('/')
 def home():
@@ -49,14 +81,15 @@ def generate_m3u():
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     clean_id = kanal_id.replace(".m3u8", "")
+    real_id = find_real_id(clean_id)
     
     try:
-        # Sadece ve sadece senin tıkladığın ID'yi sor
-        api_url = f"{EMBED_URL}/api/play/{clean_id}"
+        # Gerçek bulunan ID ile API'ye git
+        api_url = f"{EMBED_URL}/api/play/{real_id}"
         api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if api_res.status_code != 200:
-            return f"Kanal su an yayinda degil veya API kapali. (ID: {clean_id})", 404
+            return f"API Hatasi: {api_res.status_code} (Aranan: {clean_id}, Bulunan: {real_id})", 404
             
         data = api_res.json()
         stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
@@ -64,7 +97,7 @@ def play_channel(kanal_id):
         if not stream_url:
             return "Yayin linki bulunamadi", 404
             
-        # M3U8 metnini indir (Vercel bunu hızlıca yapar, videoyu indirmez)
+        # M3U8 metnini indir (Vercel'i yormaz)
         m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if m3u8_res.status_code != 200:
@@ -73,7 +106,7 @@ def play_channel(kanal_id):
         base_url = stream_url[:stream_url.rfind('/')+1]
         new_lines = []
         
-        # Video parçalarını (.ts) Cloudflare'e yönlendir
+        # Parçaları Cloudflare Worker'a yönlendir (2 dakika sınırını aşmak için)
         for line in m3u8_res.text.split('\n'):
             line = line.strip()
             if line == "": continue
