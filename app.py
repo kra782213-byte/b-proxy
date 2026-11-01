@@ -47,65 +47,59 @@ def generate_m3u():
 
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
-    try:
-        real_slug = kanal_id
-        
-        # 1. Siteden gerçek güncel ID'yi bul (Senin tıkladığın ID değişmiş olabilir)
-        try:
-            # Önce doğrudan API'yi deneyelim
-            test_api = curl_cffi.get(f"{EMBED_URL}/api/play/{real_slug}", impersonate="chrome", headers=HEADERS, verify=False, timeout=5)
-            
-            # Eğer API 404 dönerse, siteden doğru ismi bulalım
-            if test_api.status_code == 404:
-                res = curl_cffi.get(f"{BASE_URL}/kanallar", impersonate="chrome", verify=False, timeout=5)
-                soup = BeautifulSoup(res.text, "html.parser")
-                for a in soup.select('a[href^="/kanal/"]'):
-                    # Eğer senin istediğin isim (örneğin bein-sports-1) linkin içinde geçiyorsa
-                    if kanal_id in a['href']:
-                        real_slug = a['href'].split('/')[-1]
-                        break
-        except:
-            pass
+    # ID'yi temizle (eğer sonunda .m3u8 varsa)
+    clean_id = kanal_id.replace(".m3u8", "")
+    
+    # Sitedeki olası tüm ID varyasyonları (API'nin sevdiği formatı bulmak için)
+    variations = [
+        clean_id, 
+        f"tr-{clean_id}", 
+        f"tr-{clean_id}-4k", 
+        f"tr-{clean_id}-hd",
+        clean_id.replace("-fhd", ""),
+        clean_id.replace("-4k", "")
+    ]
+    
+    # Tekrarları kaldır
+    variations = list(dict.fromkeys(variations))
 
-        # 2. Gerçek ID ile taze token'ı al
-        api_url = f"{EMBED_URL}/api/play/{real_slug}"
-        api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
-        
-        if api_res.status_code != 200:
-            return f"API Hatasi: {api_res.status_code} (Aranan: {kanal_id}, Bulunan: {real_slug})", 404
+    for slug in variations:
+        try:
+            # API'ye taze link için sor
+            api_url = f"{EMBED_URL}/api/play/{slug}"
+            api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
             
-        data = api_res.json()
-        stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
-        
-        if not stream_url:
-            return "Yayin linki bulunamadi", 404
-            
-        # 3. M3u8 metnini indir
-        m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
-        
-        if m3u8_res.status_code != 200:
-            return f"Yayin Sunucusu Hatasi: {m3u8_res.status_code}", 403
-            
-        base_url = stream_url[:stream_url.rfind('/')+1]
-        new_lines = []
-        
-        # Parçaları Cloudflare Worker'a yönlendir
-        for line in m3u8_res.text.split('\n'):
-            line = line.strip()
-            if line == "": continue
-            
-            if line.startswith("#"):
-                line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{WORKER_URL}/stream?url={quote(m.group(1) if m.group(1).startswith("http") else base_url + m.group(1))}"', line)
-                new_lines.append(line)
-            else:
-                if not line.startswith("http"):
-                    line = base_url + line
-                new_lines.append(f"{WORKER_URL}/stream?url={quote(line)}")
+            if api_res.status_code == 200:
+                data = api_res.json()
+                stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
                 
-        return Response('\n'.join(new_lines), mimetype='application/vnd.apple.mpegurl')
-        
-    except Exception as e:
-        return f"Hata: {str(e)}", 500
+                if stream_url:
+                    # Başarılı! M3U8 metnini indir
+                    m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+                    
+                    if m3u8_res.status_code == 200:
+                        base_url = stream_url[:stream_url.rfind('/')+1]
+                        new_lines = []
+                        
+                        # Parçaları Cloudflare Worker'a yönlendir
+                        for line in m3u8_res.text.split('\n'):
+                            line = line.strip()
+                            if line == "": continue
+                            
+                            if line.startswith("#"):
+                                line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{WORKER_URL}/stream?url={quote(m.group(1) if m.group(1).startswith("http") else base_url + m.group(1))}"', line)
+                                new_lines.append(line)
+                            else:
+                                if not line.startswith("http"):
+                                    line = base_url + line
+                                new_lines.append(f"{WORKER_URL}/stream?url={quote(line)}")
+                                
+                        return Response('\n'.join(new_lines), mimetype='application/vnd.apple.mpegurl')
+        except Exception:
+            continue
+            
+    # Eğer hiçbiri tutmazsa detaylı hata ver
+    return f"API Hatasi: Tum varyasyonlar denendi ama bulunamadi. (ID: {clean_id})", 404
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
