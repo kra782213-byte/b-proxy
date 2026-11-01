@@ -1,138 +1,119 @@
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    const path = url.pathname;
+from flask import Flask, Response, redirect
+import curl_cffi
+import urllib3
+from bs4 import BeautifulSoup
+import re
+import time
+from urllib.parse import urlparse
 
-    // 1. LİSTE OLUŞTURMA (.m3u ve .m3u8 destekler)
-    if (path === "/liste.m3u" || path === "/liste.m3u8" || path === "/liste") {
-      return await generateM3U(url.origin);
-    }
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    // 2. KANAL İZLEME
-    if (path.startsWith("/play/")) {
-      const kanalId = path.replace("/play/", "").replace(".m3u8", "");
-      return await playChannel(kanalId, url.origin);
-    }
+app = Flask(__name__)
 
-    // 3. VİDEO PARÇALARINI PROXY'LEME
-    const targetUrl = url.searchParams.get("url");
-    if (targetUrl) {
-      return await proxyStream(targetUrl);
-    }
+# Hafıza (Cache) Değişkenleri
+CACHED_DOMAIN = "beyazelma78.com" 
+LAST_CHECK_TIME = 0
 
-    return new Response("BeyazElma Cloudflare Proxy Aktif!", { status: 200 });
-  }
-};
-
-async function generateM3U(origin) {
-  try {
-    // Siteye istek at
-    const res = await fetch("https://beyazelma78.com/kanallar", {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "tr-TR,tr;q=0.9"
-      }
-    });
+def get_real_domain(force_check=False):
+    global CACHED_DOMAIN, LAST_CHECK_TIME
     
-    if (!res.ok) {
-      throw new Error(`Siteye erisilemedi (Kod: ${res.status})`);
-    }
+    # Hafızada domain varsa ve zorla kontrol denmediyse direkt dön
+    if not force_check and CACHED_DOMAIN:
+        return CACHED_DOMAIN
 
-    const html = await res.text();
+    try:
+        print("Domain kontrol ediliyor (elmacibaba.com)...")
+        # elmacibaba'ya git ve yönlendirmeyi takip et
+        res = curl_cffi.get("https://elmacibaba.com", impersonate="chrome", allow_redirects=True, verify=False, timeout=10)
+        final_url = res.url
+        parsed = urlparse(final_url)
+        domain = parsed.netloc
 
-    // Kanalları ayıkla (Daha esnek bir regex)
-    const regex = /href="\/kanal\/([^"]+)"[\s\S]*?class="site-channel-row-name"[^>]*>([^<]+)</g;
-    let match;
-    let m3u = "#EXTM3U\n";
-    let added = 0;
+        # Eğer yönlendirme t.ly'ye veya elmacibaba'ya gidiyorsa veya domain boşsa, varsayılana dön
+        if "elmacibaba" in domain or "t.ly" in domain or not domain or "beyazelma" not in domain:
+            domain = "beyazelma78.com"
+        else:
+            parts = domain.split('.')
+            if len(parts) >= 2:
+                domain = f"{parts[-2]}.{parts[-1]}"
 
-    while ((match = regex.exec(html)) !== null) {
-      const id = match[1];
-      const name = match[2].trim().replace(/&amp;/g, '&');
-      
-      m3u += `#EXTINF:-1, ${name}\n`;
-      m3u += `${origin}/play/${id}\n`;
-      added++;
-    }
+        CACHED_DOMAIN = domain
+        print(f"Kullanılacak Domain: {CACHED_DOMAIN}")
+        return CACHED_DOMAIN
 
-    // Eğer hiç kanal bulunamadıysa IPTV'ye hata mesajı gönder (IPTV bunu kanal olarak gösterir)
-    if (added === 0) {
-      m3u += `#EXTINF:-1, HATA: Kanal bulunamadi (Site yapisi degismis olabilir)\n`;
-      m3u += `http://hata\n`;
-    }
+    except Exception as e:
+        print(f"Domain bulma hatasi (Varsayılana dönülüyor): {e}")
+        return "beyazelma78.com" # Hata olursa eski güvenli limana dön
 
-    return new Response(m3u, {
-      headers: { 
-        "Content-Type": "application/x-mpegURL", // IPTV'lerin en sevdiği format
-        "Content-Disposition": "attachment; filename=\"playlist.m3u8\"",
-        "Access-Control-Allow-Origin": "*" 
-      }
-    });
-  } catch (e) {
-    // Eğer sistem çökerse, IPTV'ye geçerli bir m3u içinde hatayı gönder
-    let errorM3u = "#EXTM3U\n";
-    errorM3u += `#EXTINF:-1, HATA: ${e.message}\n`;
-    errorM3u += `http://hata\n`;
-    return new Response(errorM3u, {
-      headers: { "Content-Type": "application/x-mpegURL", "Access-Control-Allow-Origin": "*" }
-    });
-  }
-}
+@app.route('/')
+def home():
+    return "BeyazElma Proxy Aktif ve Calisiyor!"
 
-async function playChannel(kanalId, origin) {
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://embed.beyazelma78.com/",
-    "Origin": "https://embed.beyazelma78.com"
-  };
+@app.route('/liste.m3u')
+def generate_m3u():
+    try:
+        # Liste istenirken domaini kontrol et
+        current_domain = get_real_domain(force_check=True)
+        url = f"https://{current_domain}/kanallar"
+        
+        res = curl_cffi.get(url, impersonate="chrome", verify=False, timeout=15)
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        m3u = "#EXTM3U\n"
+        for a in soup.select('a[href^="/kanal/"]'):
+            href = a.get('href', '').strip()
+            if not href: continue
+            
+            name_el = a.select_one('.site-channel-row-name')
+            name = name_el.get_text(strip=True) if name_el else "Kanal"
+            kanal_id = href.split('/')[-1]
+            
+            m3u += f'#EXTINF:-1, {name}\n'
+            m3u += f"https://b-proxy-delta.vercel.app/play/{kanal_id}\n"
+            
+        return Response(m3u, mimetype='application/x-mpegurl')
+    except Exception as e:
+        return str(e), 500
 
-  try {
-    const apiRes = await fetch(`https://embed.beyazelma78.com/api/play/${kanalId}`, { headers });
-    if (!apiRes.ok) return new Response("API Hatasi: " + apiRes.status, { status: apiRes.status });
-    
-    const data = await apiRes.json();
-    const streamUrl = data.primary || (data.fallbacks && data.fallbacks[0]);
-    if (!streamUrl) return new Response("Yayin linki yok", { status: 404 });
+@app.route('/play/<kanal_id>')
+def play_channel(kanal_id):
+    try:
+        # Kanala tıklanınca domaini kontrol etme, hafızadakini kullan (Hız için)
+        current_domain = get_real_domain(force_check=False)
+        embed_domain = f"embed.{current_domain}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": f"https://{embed_domain}/",
+            "Origin": f"https://{embed_domain}"
+        }
 
-    const m3u8Res = await fetch(streamUrl, { headers });
-    if (!m3u8Res.ok) return new Response("M3U8 Hatasi: " + m3u8Res.status, { status: m3u8Res.status });
-    
-    const text = await m3u8Res.text();
-    const baseUrl = streamUrl.substring(0, streamUrl.lastIndexOf('/') + 1);
+        page_url = f"https://{current_domain}/kanal/{kanal_id}"
+        page_res = curl_cffi.get(page_url, impersonate="chrome", headers=headers, verify=False, timeout=10)
+        
+        embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', page_res.text)
+        if not embed_paths:
+            return f"Embed linki bulunamadi. Domain: {current_domain} | HTTP: {page_res.status_code}", 404
+            
+        embed_url = f"https://{current_domain}" + embed_paths[0]
+        embed_res = curl_cffi.get(embed_url, impersonate="chrome", headers=headers, verify=False, timeout=10)
+        slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
+        
+        if not slug_match:
+            return f"Slug bulunamadi.", 404
+            
+        api_url = f"https://{embed_domain}/api/play/{slug_match.group(1)}"
+        api_res = curl_cffi.get(api_url, impersonate="chrome", headers=headers, verify=False, timeout=10)
+        
+        if api_res.status_code == 200:
+            data = api_res.json()
+            stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
+            if stream_url:
+                return redirect(stream_url, code=302)
+        
+        return f"Yayin linki alinamadi. API Kodu: {api_res.status_code}", 404
+    except Exception as e:
+        return f"Hata: {str(e)}", 500
 
-    const newText = text.split('\n').map(line => {
-      line = line.trim();
-      if (line === "" || line.startsWith("#")) return line;
-      const absolute = line.startsWith("http") ? line : baseUrl + line;
-      return `${origin}?url=${encodeURIComponent(absolute)}`;
-    }).join('\n');
-
-    return new Response(newText, {
-      headers: { "Content-Type": "application/vnd.apple.mpegurl", "Access-Control-Allow-Origin": "*" }
-    });
-
-  } catch (e) {
-    return new Response("Hata: " + e.message, { status: 500 });
-  }
-}
-
-async function proxyStream(targetUrl) {
-  try {
-    const res = await fetch(targetUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://embed.beyazelma78.com/",
-        "Origin": "https://embed.beyazelma78.com"
-      }
-    });
-    
-    return new Response(res.body, {
-      headers: { 
-        "Content-Type": res.headers.get("content-type") || "video/mp2t",
-        "Access-Control-Allow-Origin": "*" 
-      }
-    });
-  } catch (e) {
-    return new Response("Proxy Hatasi: " + e.message, { status: 500 });
-  }
-}
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
