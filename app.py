@@ -11,6 +11,7 @@ app = Flask(__name__)
 
 BASE_URL = "https://beyazelma78.com"
 EMBED_URL = "https://embed.beyazelma78.com"
+# Cloudflare Worker adresin
 WORKER_URL = "https://beyazelma-proxy.najsjskak80.workers.dev"
 
 HEADERS = {
@@ -49,46 +50,46 @@ def generate_m3u():
 def play_channel(kanal_id):
     clean_id = kanal_id.replace(".m3u8", "")
     
-    # Sadece sitenin kullandığı gerçek ID ve onun "tr-" önekli halini dene.
-    # FHD veya 4K'yı birbirine karıştırma!
-    variations = [
-        clean_id, 
-        f"tr-{clean_id}"
-    ]
-
-    for slug in variations:
-        try:
-            api_url = f"{EMBED_URL}/api/play/{slug}"
-            api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+    try:
+        # Sadece ve sadece senin tıkladığın ID'yi sor
+        api_url = f"{EMBED_URL}/api/play/{clean_id}"
+        api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+        
+        if api_res.status_code != 200:
+            return f"Kanal su an yayinda degil veya API kapali. (ID: {clean_id})", 404
             
-            if api_res.status_code == 200:
-                data = api_res.json()
-                stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
+        data = api_res.json()
+        stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
+        
+        if not stream_url:
+            return "Yayin linki bulunamadi", 404
+            
+        # M3U8 metnini indir (Vercel bunu hızlıca yapar, videoyu indirmez)
+        m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+        
+        if m3u8_res.status_code != 200:
+            return f"Yayin Sunucusu Hatasi: {m3u8_res.status_code}", 403
+            
+        base_url = stream_url[:stream_url.rfind('/')+1]
+        new_lines = []
+        
+        # Video parçalarını (.ts) Cloudflare'e yönlendir
+        for line in m3u8_res.text.split('\n'):
+            line = line.strip()
+            if line == "": continue
+            
+            if line.startswith("#"):
+                line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{WORKER_URL}/stream?url={quote(m.group(1) if m.group(1).startswith("http") else base_url + m.group(1))}"', line)
+                new_lines.append(line)
+            else:
+                if not line.startswith("http"):
+                    line = base_url + line
+                new_lines.append(f"{WORKER_URL}/stream?url={quote(line)}")
                 
-                if stream_url:
-                    m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
-                    
-                    if m3u8_res.status_code == 200:
-                        base_url = stream_url[:stream_url.rfind('/')+1]
-                        new_lines = []
-                        
-                        for line in m3u8_res.text.split('\n'):
-                            line = line.strip()
-                            if line == "": continue
-                            
-                            if line.startswith("#"):
-                                line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{WORKER_URL}/stream?url={quote(m.group(1) if m.group(1).startswith("http") else base_url + m.group(1))}"', line)
-                                new_lines.append(line)
-                            else:
-                                if not line.startswith("http"):
-                                    line = base_url + line
-                                new_lines.append(f"{WORKER_URL}/stream?url={quote(line)}")
-                                
-                        return Response('\n'.join(new_lines), mimetype='application/vnd.apple.mpegurl')
-        except Exception:
-            continue
-            
-    return f"Kanal su an yayinda degil veya API kapali. (ID: {clean_id})", 404
+        return Response('\n'.join(new_lines), mimetype='application/vnd.apple.mpegurl')
+        
+    except Exception as e:
+        return f"Hata: {str(e)}", 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
