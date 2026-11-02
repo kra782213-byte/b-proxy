@@ -50,33 +50,39 @@ def play_channel(kanal_id):
     clean_id = kanal_id.replace(".m3u8", "")
     
     try:
-        page_url = f"{BASE_URL}/kanal/{clean_id}"
-        page_res = curl_cffi.get(page_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
-        
-        embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', page_res.text)
-        if not embed_paths:
-            return f"Embed linki bulunamadi. (ID: {clean_id})", 404
-            
-        embed_url = f"{BASE_URL}" + embed_paths[0]
-        embed_res = curl_cffi.get(embed_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
-        slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
-        
-        if not slug_match:
-            return "Gercek slug bulunamadi.", 404
-            
-        real_slug = slug_match.group(1)
-        api_url = f"{EMBED_URL}/api/play/{real_slug}"
+        # Önce doğrudan API'yi deneyelim (bazen iframe aramaya gerek kalmaz)
+        api_url = f"{EMBED_URL}/api/play/{clean_id}"
         api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
-        if api_res.status_code != 200:
-            return f"API Hatasi: {api_res.status_code} (ID: {real_slug})", 404
+        stream_url = None
+        if api_res.status_code == 200:
+            data = api_res.json()
+            stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
             
-        data = api_res.json()
-        stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
+        # Eğer direkt API'den bulamadıysak, iframe'in içine girip gerçek slug'ı bulalım
+        if not stream_url:
+            page_url = f"{BASE_URL}/kanal/{clean_id}"
+            page_res = curl_cffi.get(page_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+            embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', page_res.text)
+            
+            if embed_paths:
+                embed_url = f"{BASE_URL}" + embed_paths[0]
+                embed_res = curl_cffi.get(embed_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+                slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
+                
+                if slug_match:
+                    real_slug = slug_match.group(1)
+                    api_url = f"{EMBED_URL}/api/play/{real_slug}"
+                    api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+                    
+                    if api_res.status_code == 200:
+                        data = api_res.json()
+                        stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
         
         if not stream_url:
-            return "Yayin linki bulunamadi", 404
+            return f"Yayin linki bulunamadi (ID: {clean_id})", 404
             
+        # M3U8 metnini al ve Cloudflare linklerine çevir
         m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if m3u8_res.status_code != 200:
@@ -97,7 +103,6 @@ def play_channel(kanal_id):
                     line = base_url + line
                 new_lines.append(f"{WORKER_URL}/stream?url={quote(line)}")
                 
-        # ÖNBELLEK KAPATILDI
         return Response(
             '\n'.join(new_lines), 
             mimetype='application/vnd.apple.mpegurl',
