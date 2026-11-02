@@ -14,10 +14,28 @@ EMBED_URL = "https://embed.beyazelma78.com"
 WORKER_URL = "https://beyazelma-proxy.najsjskak80.workers.dev"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-    "Referer": f"{BASE_URL}/",
-    "Origin": BASE_URL
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": f"{EMBED_URL}/",
+    "Origin": EMBED_URL
 }
+
+def find_real_id(clean_id):
+    # Sitedeki kanal isimlerini bulup, doğru ID'yi eşleştiren kurtarıcı fonksiyon
+    try:
+        res = curl_cffi.get(f"{BASE_URL}/kanallar", impersonate="chrome", verify=False, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
+        links = [a['href'].split('/')[-1] for a in soup.select('a[href^="/kanal/"]')]
+
+        if clean_id in links: return clean_id
+        if f"tr-{clean_id}" in links: return f"tr-{clean_id}"
+
+        base_name = clean_id.replace("-fhd", "").replace("-hd", "").replace("-4k", "")
+        for link in links:
+            if base_name in link:
+                return link
+        return clean_id
+    except:
+        return clean_id
 
 @app.route('/')
 def home():
@@ -46,22 +64,23 @@ def generate_m3u():
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     clean_id = kanal_id.replace(".m3u8", "")
+    real_id = find_real_id(clean_id)
+    
     try:
-        # Taze linki al
-        api_url = f"{EMBED_URL}/api/play/{clean_id}"
+        api_url = f"{EMBED_URL}/api/play/{real_id}"
         api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if api_res.status_code != 200:
-            return f"API Hatasi: {api_res.status_code}", 404
+            return f"API Hatasi: {api_res.status_code} (Aranan: {clean_id}, Bulunan: {real_id})", 404
             
         data = api_res.json()
         stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
-            
+        
         if not stream_url:
             return "Yayin linki bulunamadi", 404
             
-        # M3U8 metnini al
         m3u8_res = curl_cffi.get(stream_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+        
         if m3u8_res.status_code != 200:
             return f"Yayin Sunucusu Hatasi: {m3u8_res.status_code}", 403
             
