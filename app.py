@@ -19,24 +19,6 @@ HEADERS = {
     "Origin": EMBED_URL
 }
 
-def find_real_id(clean_id):
-    # Sitedeki kanal isimlerini bulup, doğru ID'yi eşleştiren kurtarıcı fonksiyon
-    try:
-        res = curl_cffi.get(f"{BASE_URL}/kanallar", impersonate="chrome", verify=False, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        links = [a['href'].split('/')[-1] for a in soup.select('a[href^="/kanal/"]')]
-
-        if clean_id in links: return clean_id
-        if f"tr-{clean_id}" in links: return f"tr-{clean_id}"
-
-        base_name = clean_id.replace("-fhd", "").replace("-hd", "").replace("-4k", "")
-        for link in links:
-            if base_name in link:
-                return link
-        return clean_id
-    except:
-        return clean_id
-
 @app.route('/')
 def home():
     return "Vercel ve Cloudflare Hibrit Sistem Aktif!"
@@ -64,14 +46,28 @@ def generate_m3u():
 @app.route('/play/<kanal_id>')
 def play_channel(kanal_id):
     clean_id = kanal_id.replace(".m3u8", "")
-    real_id = find_real_id(clean_id)
     
     try:
-        api_url = f"{EMBED_URL}/api/play/{real_id}"
+        page_url = f"{BASE_URL}/kanal/{clean_id}"
+        page_res = curl_cffi.get(page_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+        
+        embed_paths = re.findall(r'/api/embed\?u=[A-Za-z0-9_\-]+', page_res.text)
+        if not embed_paths:
+            return f"Embed linki bulunamadi. (ID: {clean_id})", 404
+            
+        embed_url = f"{BASE_URL}" + embed_paths[0]
+        embed_res = curl_cffi.get(embed_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
+        slug_match = re.search(r'"slug"\s*:\s*"([^"]+)"', embed_res.text)
+        
+        if not slug_match:
+            return "Gercek slug bulunamadi.", 404
+            
+        real_slug = slug_match.group(1)
+        api_url = f"{EMBED_URL}/api/play/{real_slug}"
         api_res = curl_cffi.get(api_url, impersonate="chrome", headers=HEADERS, verify=False, timeout=8)
         
         if api_res.status_code != 200:
-            return f"API Hatasi: {api_res.status_code} (Aranan: {clean_id}, Bulunan: {real_id})", 404
+            return f"API Hatasi: {api_res.status_code} (ID: {real_slug})", 404
             
         data = api_res.json()
         stream_url = data.get("primary") or (data.get("fallbacks")[0] if data.get("fallbacks") else None)
